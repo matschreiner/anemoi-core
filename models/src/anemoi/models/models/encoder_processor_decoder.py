@@ -71,11 +71,6 @@ class AnemoiModelEncProcDec(nn.Module):
         self.data_indices = data_indices
         self.statistics = statistics
 
-        self.multi_step = model_config.training.multistep_input
-        self.num_channels = model_config.model.num_channels
-
-        self.node_attributes = NamedNodesAttributes(model_config.model.trainable_parameters.hidden, self._graph_data)
-
         self._truncation_data = truncation_data
 
         # we can't register these as buffers because DDP does not support sparse tensors
@@ -331,16 +326,16 @@ class AnemoiModelEncProcDec(nn.Module):
             in_out_sharded and (grid_shard_shapes is None or model_comm_group is None)
         ), "If input is sharded, grid_shard_shapes and model_comm_group must be provided."
 
-        x_data_latent, x_skip, shard_shapes_data = self._assemble_input(
+        x_data_features, x_skip, shard_shapes_data = self._assemble_input(
             x, batch_size, grid_shard_shapes, model_comm_group
         )
 
-        x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
-        shard_shapes_hidden = get_shard_shapes(x_hidden_latent, 0, model_comm_group)
+        x_hidden_features = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
+        shard_shapes_hidden = get_shard_shapes(x_hidden_features, 0, model_comm_group)
 
-        x_data_latent, x_latent = self._run_mapper(
+        x_data_latent, x_hidden_latent = self._run_mapper(
             self.encoder,
-            (x_data_latent, x_hidden_latent),
+            (x_data_features, x_hidden_features),
             batch_size=batch_size,
             shard_shapes=(shard_shapes_data, shard_shapes_hidden),
             model_comm_group=model_comm_group,
@@ -349,18 +344,18 @@ class AnemoiModelEncProcDec(nn.Module):
             keep_x_dst_sharded=True,  # always keep x_latent sharded for the processor
         )
 
-        x_latent_proc = self.processor(
-            x_latent,
+        x_hidden_latent_proc = self.processor(
+            x_hidden_latent,
             batch_size=batch_size,
             shard_shapes=shard_shapes_hidden,
             model_comm_group=model_comm_group,
         )
 
-        x_latent_proc = x_latent_proc + x_latent
+        x_hidden_latent_proc = x_hidden_latent_proc + x_hidden_latent
 
         x_out = self._run_mapper(
             self.decoder,
-            (x_latent_proc, x_data_latent),
+            (x_hidden_latent_proc, x_data_latent),
             batch_size=batch_size,
             shard_shapes=(shard_shapes_hidden, shard_shapes_data),
             model_comm_group=model_comm_group,
